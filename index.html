@@ -82,7 +82,11 @@
       <div class="grid2">
         <div>
           <div class="label">수량</div>
-          <input id="f-qty" placeholder="예: 2개, 500g">
+          <div class="qty-row">
+            <input id="f-count" type="number" inputmode="decimal" min="0" step="any" value="1">
+            <input id="f-unit" placeholder="개" list="units">
+          </div>
+          <datalist id="units"><option>개</option><option>모</option><option>봉</option><option>팩</option><option>병</option><option>캔</option><option>g</option><option>ml</option></datalist>
         </div>
         <div>
           <div class="label">산 날</div>

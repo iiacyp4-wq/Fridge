@@ -1,4 +1,4 @@
-const APP_VERSION = 'v1.0';
+const APP_VERSION = 'v1.1';
 
 // ---------- 저장 ----------
 const KEY = 'fridge-items';
@@ -6,7 +6,14 @@ const HIST_KEY = 'fridge-history';
 const SET_KEY = 'fridge-settings';
 
 const load = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } };
-let items = load(KEY, []);
+// 예전 글자 수량("2개", "500g")을 숫자 + 단위로 바꿔 둠
+const normalize = (i) => {
+  if (typeof i.count === 'number') return i;
+  const m = String(i.qty ?? '').trim().match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+  const { qty, ...rest } = i;
+  return { ...rest, count: m ? Number(m[1]) : 1, unit: m ? m[2] || '개' : '개', memo: [i.memo, !m && qty ? qty : ''].filter(Boolean).join(' · ') };
+};
+let items = load(KEY, []).map(normalize);
 let history = load(HIST_KEY, []); // 다 먹음/버림 기록 { type, name, date }
 let settings = { soonDays: 3, ...load(SET_KEY, {}) };
 const saveItems = () => localStorage.setItem(KEY, JSON.stringify(items));
@@ -53,6 +60,37 @@ const EMOJIS = '🥬🥗🥒🥕🧅🧄🥔🌽🍅🍆🫑🌶️🥦🍄🌿�
 // ---------- 화면 ----------
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const PLACE_CLS = { 냉장: 'fridge', 냉동: 'freezer', 실온: 'room' };
+const STATUS_CLS = { expired: 'bad', soon: 'warn', ok: 'ok' };
+const fmtCount = (n) => String(Math.round(n * 100) / 100);
+const stepper = (i) => `
+  <span class="stepper">
+    <button class="step" data-step="-1" aria-label="하나 먹음">−</button>
+    <span class="count">${fmtCount(i.count)}<small>${esc(i.unit)}</small></span>
+    <button class="step" data-step="1" aria-label="하나 추가">+</button>
+  </span>`;
+const badge = (i) => `<span class="badge ${STATUS_CLS[status(i.exp)]}">${badgeText(i.exp)}</span>`;
+
+// 한 줄 카드 (장소별 탭)
+const itemRow = (i) => `
+  <div class="item p-${PLACE_CLS[i.place] || 'fridge'}" data-id="${i.id}">
+    <span class="emoji">${esc(i.emoji || '🥬')}</span>
+    <span class="info">
+      <div class="name">${esc(i.name)}</div>
+      <div class="sub"><span class="place-chip">${esc(i.place)}</span>${prettyDate(i.exp)}까지${i.memo ? ` · ${esc(i.memo)}` : ''}</div>
+    </span>
+    <span class="right">${badge(i)}${stepper(i)}</span>
+  </div>`;
+
+// 작은 카드 (전체 탭의 냉장/냉동 두 칸)
+const itemTile = (i) => `
+  <div class="item tile p-${PLACE_CLS[i.place] || 'fridge'}" data-id="${i.id}">
+    <div class="tile-top"><span class="emoji">${esc(i.emoji || '🥬')}</span><span class="name">${esc(i.name)}</span></div>
+    <div class="tile-mid">${badge(i)}<span class="sub">${prettyDate(i.exp)}</span></div>
+    ${i.memo ? `<div class="sub">${esc(i.memo)}</div>` : ''}
+    ${stepper(i)}
+  </div>`;
+
 let place = 'all';
 let query = '';
 
@@ -73,24 +111,26 @@ function render() {
     list.innerHTML = '<div class="empty">해당하는 재료가 없어요.</div>';
     return;
   }
+  // 전체 탭: 냉장은 왼쪽, 냉동은 오른쪽 (실온은 아래)
+  if (place === 'all') {
+    const col = (pl) => {
+      const g = shown.filter((i) => i.place === pl);
+      return `<div class="col"><div class="col-title p-${PLACE_CLS[pl]}">${pl} <span>${g.length}</span></div>${g.map(itemTile).join('') || '<div class="col-empty">없음</div>'}</div>`;
+    };
+    const room = shown.filter((i) => i.place === '실온');
+    list.innerHTML = `<div class="cols">${col('냉장')}${col('냉동')}</div>`
+      + (room.length ? `<div class="col-title p-room wide">실온 <span>${room.length}</span></div><div class="cols">${room.map(itemTile).join('')}</div>` : '');
+    return;
+  }
   const groups = [
     ['expired', 'bad', '기한 지남 · 빨리 확인하세요'],
     ['soon', 'warn', `곧 끝나요 · ${settings.soonDays}일 이내`],
     ['ok', '', '여유 있어요'],
   ];
-  const cls = { expired: 'bad', soon: 'warn', ok: 'ok' };
   list.innerHTML = groups.map(([st, c, title]) => {
     const g = shown.filter((i) => status(i.exp) === st);
     if (!g.length) return '';
-    return `<div class="section-title ${c}" id="sec-${st}">${title} (${g.length})</div>` + g.map((i) => `
-      <button class="item" data-id="${i.id}">
-        <span class="emoji">${esc(i.emoji || '🥬')}</span>
-        <span class="info">
-          <div class="name">${esc(i.name)}${i.qty ? ` <span style="font-weight:500;color:var(--muted)">${esc(i.qty)}</span>` : ''}</div>
-          <div class="sub">${esc(i.place)} · ${prettyDate(i.exp)}까지${i.memo ? ` · ${esc(i.memo)}` : ''}</div>
-        </span>
-        <span class="badge ${cls[st]}">${badgeText(i.exp)}</span>
-      </button>`).join('');
+    return `<div class="section-title ${c}" id="sec-${st}">${title} (${g.length})</div>` + g.map(itemRow).join('');
   }).join('');
 }
 
@@ -125,7 +165,8 @@ function openForm(item) {
   $('#emoji-btn').textContent = item?.emoji ?? '🥬';
   setPlace(item?.place ?? '냉장');
   $('#f-exp').value = item?.exp ?? addDays(today(), 7);
-  $('#f-qty').value = item?.qty ?? '';
+  $('#f-count').value = item?.count ?? 1;
+  $('#f-unit').value = item?.unit ?? '개';
   $('#f-buy').value = item?.buy ?? today();
   $('#f-memo').value = item?.memo ?? '';
   document.querySelectorAll('.preset').forEach((p) => p.classList.remove('on'));
@@ -166,7 +207,8 @@ $('#item-form').addEventListener('submit', (e) => {
     name, exp,
     emoji: $('#emoji-btn').textContent,
     place: formPlace,
-    qty: $('#f-qty').value.trim(),
+    count: Math.max(0, Number($('#f-count').value) || 0),
+    unit: $('#f-unit').value.trim() || '개',
     buy: $('#f-buy').value,
     memo: $('#f-memo').value.trim(),
   };
@@ -182,8 +224,8 @@ $('#item-form').addEventListener('submit', (e) => {
   closeSheet($('#item-sheet'));
 });
 
-function removeItem(type) {
-  const idx = items.findIndex((i) => i.id === editingId);
+function removeItem(type, id = editingId) {
+  const idx = items.findIndex((i) => i.id === id);
   if (idx < 0) return;
   const [removed] = items.splice(idx, 1);
   history.push({ type, name: removed.name, date: today() });
@@ -200,7 +242,19 @@ $('#toss-btn').addEventListener('click', () => removeItem('toss'));
 
 $('#list').addEventListener('click', (e) => {
   const b = e.target.closest('.item');
-  if (b) openForm(items.find((i) => i.id === b.dataset.id));
+  if (!b) return;
+  const item = items.find((i) => i.id === b.dataset.id);
+  const step = e.target.closest('.step');
+  if (!step) { openForm(item); return; }
+  const before = item.count;
+  const next = Math.round((before + Number(step.dataset.step)) * 100) / 100;
+  if (next <= 0) { removeItem('eat', item.id); return; } // 마지막 하나를 먹으면 다 먹음 처리
+  item.count = next;
+  saveItems(); render();
+  toast(`${item.name} ${fmtCount(next)}${item.unit} 남았어요`, () => {
+    item.count = before;
+    saveItems(); render();
+  });
 });
 $('#add-btn').addEventListener('click', () => openForm(null));
 
@@ -269,7 +323,7 @@ $('#import-file').addEventListener('change', async (e) => {
     const data = JSON.parse(await f.text());
     if (!Array.isArray(data.items)) throw new Error();
     if (!confirm(`재료 ${data.items.length}개로 바꿀까요? 지금 기록은 덮어써져요.`)) return;
-    items = data.items;
+    items = data.items.map(normalize);
     history = Array.isArray(data.history) ? data.history : [];
     if (data.settings) settings = { ...settings, ...data.settings };
     saveItems(); saveHistory(); saveSettings();
